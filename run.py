@@ -1,10 +1,9 @@
+import re
+from datasets import load_dataset, Dataset
 from trl import GRPOTrainer, GRPOConfig
 from transformers import TrainingArguments
 from transformers import AutoModelForCausalLM
 from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
-
-import re
-from datasets import load_dataset, Dataset
 
 # Load and prep dataset
 SYSTEM_PROMPT = """
@@ -95,40 +94,63 @@ def xmlcount_reward_func(completions, **kwargs) -> list[float]:
     contents = [completion[0]["content"] for completion in completions]
     return [count_xml(c) for c in contents]
 
-
-# Dummy reward function: count the number of unique characters in the completions
-def reward_num_unique_chars(completions, **kwargs):
-    return [len(set(c)) for c in completions]
+from transformers import AutoTokenizer
 
 
-model_name_or_path = "./Qwen2-0.5B-Instruct"
-peft_config = LoraConfig(
-    task_type=TaskType.CAUSAL_LM, inference_mode=False, r=4, lora_alpha=32, lora_dropout=0.1
-)
+model_name_or_path = "./Qwen2.5-7B-Instruct"
+
+tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+tokenizer.pad_token = tokenizer.eos_token
+
+peft_config = LoraConfig(task_type=TaskType.CAUSAL_LM, 
+                         inference_mode=False, 
+                         r=32, 
+                         lora_alpha=32, 
+                        #  lora_dropout=0.0
+                         )
 
 model = AutoModelForCausalLM.from_pretrained(model_name_or_path)
 model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()
 
-
-# GRPO 配置
-grpo_config = GRPOConfig(
-    output_dir="./output_grpo",
-    per_device_train_batch_size=32,
-    per_device_eval_batch_size=32,
-    num_train_epochs=2,
-    weight_decay=0.01,
-    save_total_limit=2,
-    report_to="tensorboard",
-    # fp16=True,
-    # num_workers=8
+training_args = GRPOConfig(
+    output_dir="./Qwen2.5-7B-Instruct-GRPO",
+    run_name="Qwen2.5-7B-Instruct-GRPO",
+    learning_rate=5e-6,
+    adam_beta1 = 0.9,
+    adam_beta2 = 0.99,
+    weight_decay = 0.1,
+    warmup_ratio = 0.1,
+    lr_scheduler_type='cosine',
+    logging_steps=1,
+    bf16=True,
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=4,
+    num_generations=8,
+    max_prompt_length=512,
+    max_completion_length=2048,
+    num_train_epochs=1,
+    save_steps=100,
+    max_grad_norm=0.1,
+    log_on_each_node=False,
+    use_vllm=False,
+    # vllm_gpu_memory_utilization=.2,
+    # vllm_device="cuda:0",
+    report_to="tensorboard" #I'm disabling Wandb.
 )
+
 
 
 trainer = GRPOTrainer(
     model=model,
-    reward_funcs=reward_num_unique_chars,
-    args=grpo_config,
+    processing_class=tokenizer,
+    reward_funcs=[
+        xmlcount_reward_func,
+        soft_format_reward_func,
+        strict_format_reward_func,
+        int_reward_func,
+        correctness_reward_func],
+    args=training_args,
     train_dataset=dataset,
 )
 
