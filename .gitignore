@@ -1,0 +1,5 @@
+Qwen2-0.5B-Instruct/
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+tmp.*
+output_grpo/
